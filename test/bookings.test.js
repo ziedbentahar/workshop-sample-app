@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBooking, listBookings, ValidationError } from '../src/bookings.js';
+import { ConflictError, createBooking, listBookings, ValidationError } from '../src/bookings.js';
 import { createStore } from '../src/store.js';
 
 const validBooking = {
@@ -57,6 +57,97 @@ test('accepts a real leap day and millisecond timestamps', () => {
     ...validBooking, startTime: '2032-02-29T09:00:00.125Z', endTime: '2032-02-29T10:00:00.125Z',
   });
   assert.equal(booking.startTime, '2032-02-29T09:00:00.125Z');
+});
+
+test('rejects a booking that overlaps an existing booking in the same room', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(
+    () => createBooking(store, { ...validBooking, startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }),
+    ConflictError
+  );
+  assert.equal(store.bookings.length, 1);
+});
+
+for (const [description, overlap] of [
+  ['the new booking is fully inside the existing one', { startTime: '2030-06-12T09:15:00Z', endTime: '2030-06-12T09:45:00Z' }],
+  ['the new booking fully contains the existing one', { startTime: '2030-06-12T08:30:00Z', endTime: '2030-06-12T10:30:00Z' }],
+  ['the new booking overlaps the start of the existing one', { startTime: '2030-06-12T08:30:00Z', endTime: '2030-06-12T09:30:00Z' }],
+  ['the new booking overlaps the end of the existing one', { startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }],
+  ['the new booking exactly matches the existing one', { startTime: validBooking.startTime, endTime: validBooking.endTime }],
+]) {
+  test(`rejects an overlapping booking when ${description}`, () => {
+    const store = createStore();
+    createBooking(store, validBooking);
+    assert.throws(() => createBooking(store, { ...validBooking, ...overlap }), ConflictError);
+    assert.equal(store.bookings.length, 1);
+  });
+}
+
+test('a 409 conflict carries a generic message with no leaked booking details', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(
+    () => createBooking(store, validBooking),
+    (error) => error instanceof ConflictError
+      && error.status === 409
+      && error.message === 'This room is already booked for the selected time.'
+  );
+});
+
+test('allows a booking that starts exactly when another ends in the same room (back-to-back)', () => {
+  const store = createStore();
+  const first = createBooking(store, validBooking);
+  const backToBack = createBooking(store, { ...validBooking, startTime: validBooking.endTime, endTime: '2030-06-12T11:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(first.endTime, backToBack.startTime);
+});
+
+test('allows a booking that ends exactly when another starts in the same room (back-to-back)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const before = createBooking(store, { ...validBooking, startTime: '2030-06-12T08:00:00Z', endTime: validBooking.startTime });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(before.endTime, new Date(validBooking.startTime).toISOString());
+});
+
+test('different rooms remain independently bookable for the same overlapping time', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const other = createBooking(store, { ...validBooking, roomId: 'maple' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(other.roomId, 'maple');
+});
+
+test('reports only the first conflict found, in insertion order, when multiple bookings overlap', () => {
+  const store = createStore();
+  const first = createBooking(store, { ...validBooking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T09:30:00Z' });
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T09:45:00Z', endTime: '2030-06-12T10:15:00Z' });
+  let caught;
+  try {
+    createBooking(store, { ...validBooking, startTime: '2030-06-12T09:00:00Z', endTime: '2030-06-12T10:15:00Z' });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof ConflictError);
+  assert.equal(caught.message, 'This room is already booked for the selected time.');
+  assert.equal(store.bookings.length, 2);
+  assert.equal(store.bookings[0].id, first.id);
+});
+
+test('a non-overlapping booking still succeeds (success path preserved)', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  const result = createBooking(store, { ...validBooking, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' });
+  assert.equal(store.bookings.length, 2);
+  assert.equal(result.roomId, validBooking.roomId);
+});
+
+test('structural validation errors take precedence over the overlap check', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(() => createBooking(store, { ...validBooking, title: '' }), ValidationError);
+  assert.equal(store.bookings.length, 1);
 });
 
 const invalidInputs = [
