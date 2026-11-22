@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
+import { filterBookings, timeLabel } from './searchBookings.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
-const timeLabel = (value) => value.slice(11, 16);
 const dateLabel = (value) => new Date(`${value}T12:00:00Z`).toLocaleDateString('en', {
   weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
 });
@@ -107,10 +107,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState('');
-  const term = query.trim().toLowerCase();
-  const visibleBookings = term
-    ? bookings.filter((b) => `${b.title} ${b.organizer} ${timeLabel(b.startTime)} ${timeLabel(b.endTime)}`.toLowerCase().includes(term))
-    : bookings;
+  const visibleBookings = filterBookings(bookings, query);
   const room = rooms.find((item) => item.id === roomId);
 
   useEffect(() => {
