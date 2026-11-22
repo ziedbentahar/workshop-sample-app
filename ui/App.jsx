@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const timeLabel = (value) => value.slice(11, 16);
@@ -24,30 +24,38 @@ function RoomSketch({ capacity }) {
   );
 }
 
-function BookingForm({ room, date, onBooked }) {
+const isSingleDay = (booking) => booking.startTime.slice(0, 10) === booking.endTime.slice(0, 10);
+
+function BookingForm({ room, date, booking, onSaved, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const editing = Boolean(booking);
+  const showTimes = !editing || isSingleDay(booking);
+  const timeDate = editing ? booking.startTime.slice(0, 10) : date;
 
   async function submit(event) {
     event.preventDefault();
     const form = event.currentTarget;
     const fields = new FormData(form);
+    const body = {
+      title: fields.get('title'),
+      organizer: fields.get('organizer'),
+      notes: fields.get('notes'),
+    };
+    if (showTimes) {
+      body.startTime = `${timeDate}T${fields.get('startTime')}:00Z`;
+      body.endTime = `${timeDate}T${fields.get('endTime')}:00Z`;
+    }
     setError('');
     setSaving(true);
     try {
-      const booking = await api('/bookings', {
-        method: 'POST',
+      const saved = await api(editing ? `/bookings/${encodeURIComponent(booking.id)}` : '/bookings', {
+        method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          roomId: room.id,
-          title: fields.get('title'),
-          organizer: fields.get('organizer'),
-          startTime: `${date}T${fields.get('startTime')}:00Z`,
-          endTime: `${date}T${fields.get('endTime')}:00Z`,
-        }),
+        body: JSON.stringify(editing ? body : { roomId: room.id, ...body }),
       });
-      form.reset();
-      onBooked(booking);
+      if (!editing) form.reset();
+      onSaved(saved);
     } catch (error) {
       setError(error.message);
     } finally {
@@ -58,35 +66,47 @@ function BookingForm({ room, date, onBooked }) {
   return (
     <aside className="booking-panel">
       <div className="flex items-center justify-between gap-4">
-        <span className="eyebrow">Make it happen</span>
+        <span className="eyebrow">{editing ? 'Fine-tune it' : 'Make it happen'}</span>
         <span className="rounded-full border border-white/20 px-2.5 py-1 text-xs">UTC</span>
       </div>
-      <h2 className="mt-6 text-3xl tracking-tight">Book {room.name}.</h2>
+      <h2 className="mt-6 break-words text-3xl tracking-tight">{editing ? `Edit “${booking.title}”.` : `Book ${room.name}.`}</h2>
       <p className="mt-2 text-sm text-white/70">{dateLabel(date)} · Up to {room.capacity} people</p>
       <form onSubmit={submit} className="mt-8 space-y-5">
         <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
           <label className="field-label">
             Meeting title
-            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} />
+            <input name="title" placeholder="e.g. Product brainstorm" required maxLength={100} defaultValue={booking?.title} />
           </label>
           <label className="field-label">
             Organizer
-            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" />
+            <input name="organizer" placeholder="e.g. Alex Morgan" required maxLength={100} autoComplete="off" defaultValue={booking?.organizer} />
           </label>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="field-label">
-              Start time
-              <input name="startTime" type="time" defaultValue="09:00" step="60" required />
-            </label>
-            <label className="field-label">
-              End time
-              <input name="endTime" type="time" defaultValue="10:00" step="60" required />
-            </label>
-          </div>
+          {showTimes ? (
+            <div className="grid grid-cols-2 gap-3">
+              <label className="field-label">
+                Start time
+                <input name="startTime" type="time" defaultValue={editing ? timeLabel(booking.startTime) : '09:00'} step="60" required />
+              </label>
+              <label className="field-label">
+                End time
+                <input name="endTime" type="time" defaultValue={editing ? timeLabel(booking.endTime) : '10:00'} step="60" required />
+              </label>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-white/20 p-3 text-xs leading-relaxed text-white/75">
+              {booking.startTime.slice(0, 10)} {timeLabel(booking.startTime)} → {booking.endTime.slice(0, 10)} {timeLabel(booking.endTime)} UTC.
+              Times of multi-day bookings can't be edited here.
+            </p>
+          )}
+          <label className="field-label">
+            Notes <span className="font-normal text-white/60">(optional)</span>
+            <textarea name="notes" rows={3} maxLength={1000} placeholder="e.g. Bring a laptop" defaultValue={booking?.notes} />
+          </label>
           {error && <p role="alert" className="rounded-xl bg-white p-3 text-sm text-red-800">{error}</p>}
           <button className="book-button" type="submit">
-            {saving ? 'Booking…' : 'Confirm booking'} <span aria-hidden="true">↗</span>
+            {editing ? (saving ? 'Saving…' : 'Save changes') : (saving ? 'Booking…' : 'Confirm booking')} <span aria-hidden="true">↗</span>
           </button>
+          {editing && <button className="cancel-button" type="button" onClick={onCancel}>Cancel</button>}
         </fieldset>
       </form>
       <p className="mt-5 text-xs leading-relaxed text-white/60">
@@ -106,6 +126,9 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
+  const [editing, setEditing] = useState(null);
+  const [editError, setEditError] = useState('');
+  const editRequest = useRef(0);
   const room = rooms.find((item) => item.id === roomId);
 
   useEffect(() => {
@@ -132,10 +155,28 @@ export default function App() {
     return () => { ignore = true; };
   }, [roomId, date, revision]);
 
+  function leaveEditMode() {
+    editRequest.current += 1;
+    setEditing(null);
+    setEditError('');
+  }
+
   function changeDate(value) {
     if (!value) return;
     setDate(value);
     setNotice('');
+    leaveEditMode();
+  }
+
+  async function startEditing(id) {
+    const request = ++editRequest.current;
+    setEditError('');
+    try {
+      const booking = await api(`/bookings/${encodeURIComponent(id)}`);
+      if (request === editRequest.current) setEditing(booking);
+    } catch (error) {
+      if (request === editRequest.current) setEditError(error.message);
+    }
   }
 
   function shiftDate(days) {
@@ -183,7 +224,7 @@ export default function App() {
               <button type="button" key={item.id} aria-pressed={roomId === item.id}
                 aria-label={`${item.name}, ${item.capacity} people, ${item.location}`}
                 className={`room-card room-${index} ${roomId === item.id ? 'selected' : ''}`}
-                onClick={() => { setRoomId(item.id); setNotice(''); }}>
+                onClick={() => { setRoomId(item.id); setNotice(''); leaveEditMode(); }}>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-stone-600">{item.location}</span>
                   <span className="selection-dot" aria-hidden="true">{roomId === item.id ? '✓' : ''}</span>
@@ -225,6 +266,7 @@ export default function App() {
             </div>
             {notice && notice.roomId === roomId && notice.date === date &&
               <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice.message}</p>}
+            {editError && <p role="alert" className="error-banner mb-4">{editError}</p>}
             {loading ? <p role="status" className="py-12 text-center text-sm text-stone-500">Loading schedule…</p>
               : error ? <div role="alert" className="error-banner">{error} <button className="underline" onClick={() => setRevision((value) => value + 1)}>Retry</button></div>
                 : bookings.length === 0 ? (
@@ -241,21 +283,32 @@ export default function App() {
                           <p className="font-semibold">{timeLabel(booking.startTime)}</p>
                           <p className="mt-1 text-stone-500">{timeLabel(booking.endTime)}</p>
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <h4 className="break-words font-medium">{booking.title}</h4>
                           <p className="mt-1 break-words text-sm text-stone-500">{booking.organizer}</p>
+                          {booking.notes &&
+                            <p className="mt-2 break-words whitespace-pre-line text-sm text-stone-700">{booking.notes}</p>}
                           {(booking.startTime.slice(0, 10) !== date || booking.endTime.slice(0, 10) !== date) &&
                             <p className="mt-2 text-xs text-stone-500">{booking.startTime.slice(0, 10)} → {booking.endTime.slice(0, 10)} · UTC</p>}
                         </div>
+                        <button type="button" className="edit-button" aria-label={`Edit ${booking.title}`}
+                          aria-pressed={editing?.id === booking.id} onClick={() => startEditing(booking.id)}>Edit</button>
                       </li>
                     ))}
                   </ul>
                 )}
           </div>
-          {room && <BookingForm key={`${roomId}-${date}`} room={room} date={date} onBooked={(booking) => {
-            setNotice({ roomId: booking.roomId, date: booking.startTime.slice(0, 10), message: `“${booking.title}” booked in ${room.name}.` });
-            setRevision((value) => value + 1);
-          }} />}
+          {room && <BookingForm key={`${roomId}-${date}-${editing?.id ?? 'new'}`} room={room} date={date} booking={editing}
+            onCancel={leaveEditMode}
+            onSaved={(booking) => {
+              if (editing) {
+                leaveEditMode();
+                setNotice({ roomId, date, message: `“${booking.title}” updated.` });
+              } else {
+                setNotice({ roomId: booking.roomId, date: booking.startTime.slice(0, 10), message: `“${booking.title}” booked in ${room.name}.` });
+              }
+              setRevision((value) => value + 1);
+            }} />}
         </section>
         <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 border-t border-stone-300 pt-5 text-xs text-stone-500">
           <span>Gather · A little space for good work.</span>
