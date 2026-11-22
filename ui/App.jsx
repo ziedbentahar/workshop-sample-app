@@ -106,6 +106,11 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
+  const [query, setQuery] = useState('');
+  const term = query.trim().toLowerCase();
+  const visibleBookings = term
+    ? bookings.filter((b) => `${b.title} ${b.organizer} ${timeLabel(b.startTime)} ${timeLabel(b.endTime)}`.toLowerCase().includes(term))
+    : bookings;
   const room = rooms.find((item) => item.id === roomId);
 
   useEffect(() => {
@@ -221,8 +226,10 @@ export default function App() {
             </div>
             <div className="mb-4 flex items-center justify-between border-t border-stone-200 pt-5">
               <h3 className="font-medium">{room?.name ?? 'Room'} schedule</h3>
-              {!loading && !error && <span className="text-xs text-stone-500">{bookings.length} {bookings.length === 1 ? 'booking' : 'bookings'}</span>}
+              {!loading && !error && <span className="text-xs text-stone-500">{visibleBookings.length} {visibleBookings.length === 1 ? 'booking' : 'bookings'}</span>}
             </div>
+            <input type="search" aria-label="Search meetings" placeholder="Search by title, organizer or time"
+              value={query} onChange={(event) => setQuery(event.target.value)} className="date-input mb-4 w-full" />
             {notice && notice.roomId === roomId && notice.date === date &&
               <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice.message}</p>}
             {loading ? <p role="status" className="py-12 text-center text-sm text-stone-500">Loading schedule…</p>
@@ -233,9 +240,11 @@ export default function App() {
                     <h4 className="font-serif text-2xl">A little breathing room.</h4>
                     <p className="mt-2 max-w-xs text-sm leading-relaxed text-stone-500">No bookings for this room on this day.<br />Make the first one.</p>
                   </div>
+                ) : visibleBookings.length === 0 ? (
+                  <p role="status" className="py-12 text-center text-sm text-stone-500">No meetings match “{query.trim()}”.</p>
                 ) : (
                   <ul className="space-y-3" aria-label="Bookings">
-                    {bookings.map((booking) => (
+                    {visibleBookings.map((booking) => (
                       <li key={booking.id} className="flex gap-4 rounded-xl border border-stone-200 bg-white p-4">
                         <div className="min-w-14 border-r border-stone-200 pr-4 text-sm">
                           <p className="font-semibold">{timeLabel(booking.startTime)}</p>
