@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import express from 'express';
-import { createBooking, listBookings } from './bookings.js';
+import { createBooking, getBooking, listBookings, updateBooking } from './bookings.js';
 import { createStore } from './store.js';
 
 function allowMethods(methods) {
@@ -11,6 +11,16 @@ function allowMethods(methods) {
     response.status(405).json({ error: 'Method not allowed.' });
   };
 }
+
+const jsonBody = [
+  (request, response, next) => {
+    if (request.get('Content-Type')?.split(';')[0].trim() !== 'application/json') {
+      return response.status(415).json({ error: 'Use Content-Type: application/json.' });
+    }
+    next();
+  },
+  express.json({ limit: '16kb', strict: false }),
+];
 
 export function createAppServer({ store = createStore() } = {}) {
   const app = express();
@@ -31,18 +41,18 @@ export function createAppServer({ store = createStore() } = {}) {
     .get((request, response) => {
       response.json(listBookings(store, request.query.roomId, request.query.date));
     })
-    .post(
-      (request, response, next) => {
-        if (request.get('Content-Type')?.split(';')[0].trim() !== 'application/json') {
-          return response.status(415).json({ error: 'Use Content-Type: application/json.' });
-        }
-        next();
-      },
-      express.json({ limit: '16kb', strict: false }),
-      (request, response) => {
-        response.status(201).json(createBooking(store, request.body));
-      }
-    );
+    .post(jsonBody, (request, response) => {
+      response.status(201).json(createBooking(store, request.body));
+    });
+
+  app.route('/api/bookings/:id')
+    .all(allowMethods(['GET', 'PATCH']))
+    .get((request, response) => {
+      response.json(getBooking(store, request.params.id));
+    })
+    .patch(jsonBody, (request, response) => {
+      response.json(updateBooking(store, request.params.id, request.body));
+    });
 
   app.use((request, response) => {
     response.status(404).json({ error: 'API endpoint not found.' });

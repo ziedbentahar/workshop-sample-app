@@ -1,7 +1,7 @@
 # Gather — room bookings
 
 A simple room-booking application. Choose a room and date, view its bookings,
-and book a meeting.
+book a meeting with optional notes, and edit existing bookings.
 
 ## Quick start
 
@@ -64,6 +64,8 @@ not configured; Vite is used as a development server.
 | `GET /api/rooms` | `200`: array of rooms (`id`, `name`, `capacity`, `location`, `description`). |
 | `GET /api/bookings?roomId=cedar&date=2030-06-12` | `200`: array of bookings touching that UTC date, sorted by start time. Both filters are required. |
 | `POST /api/bookings` | `201`: the created booking, including its generated `id`. |
+| `GET /api/bookings/:id` | `200`: the booking; `404` if the id is unknown. |
+| `PATCH /api/bookings/:id` | `200`: the updated booking. Send only the fields to change (`roomId`, `title`, `organizer`, `startTime`, `endTime`, `notes`); `404` if the id is unknown. |
 
 Example creation:
 
@@ -75,21 +77,45 @@ curl http://localhost:3000/api/bookings \
     "title": "Product brainstorm",
     "organizer": "Alex Morgan",
     "startTime": "2030-06-12T09:00:00Z",
-    "endTime": "2030-06-12T10:00:00Z"
+    "endTime": "2030-06-12T10:00:00Z",
+    "notes": "Bring a laptop"
   }'
 ```
 
-The response preserves those fields, trims the title and organizer, adds a
+Example update (replace `<id>` with the booking's `id`):
+
+```sh
+curl -X PATCH http://localhost:3000/api/bookings/<id> \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "Product review", "notes": ""}'
+```
+
+The response preserves those fields, trims the title, organizer, and notes, adds a
 UUID `id`, and normalizes timestamps to UTC with milliseconds
 (`2030-06-12T09:00:00.000Z`). Unknown input fields are ignored.
+
+A `PATCH` changes only the fields it sends; `id` and unknown fields are ignored
+and `{}` changes nothing. The merged booking is validated with the same rules as
+a new one, and on any error the stored booking is left unchanged.
 
 - Rooms: `cedar` (4 people), `maple` (8), `aspen` (12).
 - Title and organizer: 1–100 characters after trimming.
 - Timestamps: valid ISO 8601 UTC strings ending in `Z`, with seconds and
   optional three-digit milliseconds. End must be after start.
+- Notes: optional text, at most 1000 characters after trimming. Missing notes
+  are stored as `""`.
+- No overlaps: a booking cannot overlap another booking in the same room
+  (`a.start < b.end && b.start < a.end`). Back-to-back bookings and bookings in
+  different rooms are allowed. When updating, the booking itself is ignored.
+  Overlaps return `409` with
+  `{"error":"This room is already booked at that time."}`.
 - Multi-day bookings are supported by the API and appear on each affected date.
-  The browser form creates bookings within its selected day.
-- Validation errors and malformed JSON return `400`; wrong content type returns
-  `415`; bodies larger than 16 KiB return `413`.
-- Errors have the shape `{"error":"Helpful message"}`. Unknown routes return
-  `404`; unsupported methods return `405`.
+  The browser form creates bookings within its selected day, and does not edit
+  the times of multi-day bookings.
+- Validation errors and malformed JSON return `400` and are checked before
+  overlaps (`409`). For `POST` and `PATCH`, a wrong content type returns `415`
+  and bodies larger than 16 KiB return `413`.
+- Errors have the shape `{"error":"Helpful message"}`. Unknown routes and
+  unknown booking ids return `404`; unsupported methods return `405` with an
+  `Allow` header (`GET, POST` on `/api/bookings`, `GET, PATCH` on
+  `/api/bookings/:id`).

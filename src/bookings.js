@@ -4,6 +4,14 @@ export class ValidationError extends Error {
   status = 400;
 }
 
+export class NotFoundError extends Error {
+  status = 404;
+}
+
+export class ConflictError extends Error {
+  status = 409;
+}
+
 function requireRoom(store, roomId) {
   if (!store.rooms.some((room) => room.id === roomId)) {
     throw new ValidationError('Choose an existing room.');
@@ -34,10 +42,15 @@ export function listBookings(store, roomId, date) {
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
-export function createBooking(store, input) {
+const EDITABLE_FIELDS = ['roomId', 'title', 'organizer', 'startTime', 'endTime', 'notes'];
+
+function requireObject(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('Provide a booking object.');
   }
+}
+
+function validateBooking(store, input) {
   requireRoom(store, input.roomId);
   for (const field of ['title', 'organizer']) {
     if (typeof input[field] !== 'string' || !input[field].trim() || input[field].trim().length > 100) {
@@ -49,14 +62,51 @@ export function createBooking(store, input) {
   if (startTime >= endTime) {
     throw new ValidationError('End time must be after start time.');
   }
-  const booking = {
-    id: randomUUID(),
+  const notes = input.notes ?? '';
+  if (input.notes === null || typeof notes !== 'string' || notes.trim().length > 1000) {
+    throw new ValidationError('Notes must be text of at most 1000 characters.');
+  }
+  return {
     roomId: input.roomId,
     title: input.title.trim(),
     organizer: input.organizer.trim(),
     startTime,
     endTime,
+    notes: notes.trim(),
   };
+}
+
+function assertNoOverlap(store, candidate, ignoreId) {
+  const conflict = store.bookings.some((booking) => booking.id !== ignoreId
+    && booking.roomId === candidate.roomId
+    && candidate.startTime < booking.endTime
+    && booking.startTime < candidate.endTime);
+  if (conflict) throw new ConflictError('This room is already booked at that time.');
+}
+
+export function createBooking(store, input) {
+  requireObject(input);
+  const fields = validateBooking(store, input);
+  assertNoOverlap(store, fields);
+  const booking = { id: randomUUID(), ...fields };
   store.bookings.push(booking);
   return booking;
+}
+
+export function getBooking(store, id) {
+  const booking = store.bookings.find((item) => item.id === id);
+  if (!booking) throw new NotFoundError('Booking not found.');
+  return booking;
+}
+
+export function updateBooking(store, id, input) {
+  requireObject(input);
+  const booking = getBooking(store, id);
+  const merged = { ...booking };
+  for (const field of EDITABLE_FIELDS) {
+    if (Object.hasOwn(input, field)) merged[field] = input[field];
+  }
+  const fields = validateBooking(store, merged);
+  assertNoOverlap(store, fields, id);
+  return Object.assign(booking, fields);
 }

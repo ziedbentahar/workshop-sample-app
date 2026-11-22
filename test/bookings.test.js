@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createBooking, listBookings, ValidationError } from '../src/bookings.js';
+import {
+  ConflictError, createBooking, getBooking, listBookings, NotFoundError, updateBooking, ValidationError,
+} from '../src/bookings.js';
 import { createStore } from '../src/store.js';
 
 const validBooking = {
@@ -27,7 +29,7 @@ test('creates a booking, trims text, and normalizes UTC timestamps', () => {
   assert.match(result.id, /^[0-9a-f-]{36}$/);
   assert.deepEqual(result, {
     id: result.id, ...validBooking,
-    startTime: '2030-06-12T09:00:00.000Z', endTime: '2030-06-12T10:00:00.000Z',
+    startTime: '2030-06-12T09:00:00.000Z', endTime: '2030-06-12T10:00:00.000Z', notes: '',
   });
   assert.equal(store.bookings.length, 1);
 });
@@ -78,6 +80,9 @@ const invalidInputs = [
   ['impossible hour', { ...validBooking, startTime: '2030-06-12T24:00:00Z' }],
   ['zero duration', { ...validBooking, endTime: validBooking.startTime }],
   ['negative duration', { ...validBooking, endTime: '2030-06-12T08:00:00Z' }],
+  ['long notes', { ...validBooking, notes: 'a'.repeat(1001) }],
+  ['non-string notes', { ...validBooking, notes: 42 }],
+  ['null notes', { ...validBooking, notes: null }],
 ];
 
 for (const [description, input] of invalidInputs) {
@@ -96,4 +101,115 @@ for (const date of [undefined, '', '2030-2-1', '2030-02-30', 'not-a-date']) {
 
 test('rejects an unknown room filter', () => {
   assert.throws(() => listBookings(createStore(), 'missing', '2030-06-12'), ValidationError);
+});
+
+test('notes are trimmed, default to an empty string, and allow 1000 characters', () => {
+  const store = createStore();
+  assert.equal(createBooking(store, validBooking).notes, '');
+  const trimmed = createBooking(store, {
+    ...validBooking, notes: '  Bring laptop ', startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z',
+  });
+  assert.equal(trimmed.notes, 'Bring laptop');
+  const longest = createBooking(store, {
+    ...validBooking, notes: ` ${'a'.repeat(1000)} `, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z',
+  });
+  assert.equal(longest.notes.length, 1000);
+});
+
+test('getBooking returns a stored booking and throws NotFoundError otherwise', () => {
+  const store = createStore();
+  const booking = createBooking(store, validBooking);
+  assert.equal(getBooking(store, booking.id), booking);
+  assert.throws(() => getBooking(store, 'missing'), NotFoundError);
+});
+
+test('updateBooking changes only the given fields and ignores id and unknown fields', () => {
+  const store = createStore();
+  const booking = createBooking(store, validBooking);
+  const before = { ...booking };
+  const result = updateBooking(store, booking.id, { title: '  New  ', id: 'other', extra: true });
+  assert.deepEqual(result, { ...before, title: 'New' });
+  assert.equal(getBooking(store, booking.id).title, 'New');
+  assert.deepEqual(updateBooking(store, booking.id, {}), { ...before, title: 'New' });
+  const updated = updateBooking(store, booking.id, { notes: ' Agenda ', endTime: '2030-06-12T10:30:00Z' });
+  assert.equal(updated.notes, 'Agenda');
+  assert.equal(updated.endTime, '2030-06-12T10:30:00.000Z');
+});
+
+test('updateBooking throws NotFoundError for an unknown id', () => {
+  assert.throws(() => updateBooking(createStore(), 'missing', { title: 'New' }), NotFoundError);
+});
+
+const invalidPatches = [
+  ['missing body', undefined],
+  ['null body', null],
+  ['array body', []],
+  ['blank title', { title: ' ' }],
+  ['long organizer', { organizer: 'a'.repeat(101) }],
+  ['unknown room', { roomId: 'missing' }],
+  ['end before stored start', { endTime: '2030-06-12T08:00:00Z' }],
+  ['start after stored end', { startTime: '2030-06-12T11:00:00Z' }],
+  ['invalid timestamp', { startTime: 'soon' }],
+  ['long notes', { notes: 'a'.repeat(1001) }],
+  ['non-string notes', { notes: ['x'] }],
+];
+
+for (const [description, patch] of invalidPatches) {
+  test(`updateBooking rejects ${description} and leaves the booking unchanged`, () => {
+    const store = createStore();
+    const booking = createBooking(store, validBooking);
+    const before = { ...booking };
+    assert.throws(() => updateBooking(store, booking.id, patch), ValidationError);
+    assert.deepEqual(getBooking(store, booking.id), before);
+  });
+}
+
+test('creating an overlapping booking in the same room is rejected', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  for (const [startTime, endTime] of [
+    ['2030-06-12T09:30:00Z', '2030-06-12T10:30:00Z'],
+    ['2030-06-12T08:30:00Z', '2030-06-12T09:30:00Z'],
+    ['2030-06-12T09:15:00Z', '2030-06-12T09:45:00Z'],
+    ['2030-06-12T08:00:00Z', '2030-06-12T11:00:00Z'],
+  ]) {
+    assert.throws(() => createBooking(store, { ...validBooking, startTime, endTime }), ConflictError);
+  }
+  assert.equal(store.bookings.length, 1);
+});
+
+test('back-to-back bookings and other rooms do not conflict', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' });
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T08:00:00Z', endTime: '2030-06-12T09:00:00Z' });
+  createBooking(store, { ...validBooking, roomId: 'maple' });
+  assert.equal(store.bookings.length, 4);
+});
+
+test('validation errors are reported before conflicts', () => {
+  const store = createStore();
+  createBooking(store, validBooking);
+  assert.throws(() => createBooking(store, { ...validBooking, title: ' ' }), ValidationError);
+});
+
+test('updateBooking rejects moving onto another booking and leaves the store unchanged', () => {
+  const store = createStore();
+  const first = createBooking(store, validBooking);
+  const second = createBooking(store, { ...validBooking, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' });
+  const other = createBooking(store, { ...validBooking, roomId: 'maple', startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' });
+  const snapshot = structuredClone(store.bookings);
+  assert.throws(() => updateBooking(store, second.id, { startTime: '2030-06-12T09:30:00Z' }), ConflictError);
+  assert.throws(() => updateBooking(store, first.id, { roomId: 'maple', startTime: '2030-06-12T11:30:00Z', endTime: '2030-06-12T12:30:00Z' }), ConflictError);
+  assert.throws(() => updateBooking(store, other.id, { roomId: 'cedar', title: 'Moved' }), ConflictError);
+  assert.deepEqual(store.bookings, snapshot);
+});
+
+test('updateBooking lets a booking keep, shrink, or shift within its own slot', () => {
+  const store = createStore();
+  const booking = createBooking(store, { ...validBooking, endTime: '2030-06-12T11:00:00Z' });
+  createBooking(store, { ...validBooking, startTime: '2030-06-12T11:00:00Z', endTime: '2030-06-12T12:00:00Z' });
+  assert.equal(updateBooking(store, booking.id, { title: 'Renamed' }).title, 'Renamed');
+  assert.equal(updateBooking(store, booking.id, { startTime: '2030-06-12T09:30:00Z', endTime: '2030-06-12T10:30:00Z' }).startTime, '2030-06-12T09:30:00.000Z');
+  assert.equal(updateBooking(store, booking.id, { startTime: '2030-06-12T10:00:00Z', endTime: '2030-06-12T11:00:00Z' }).endTime, '2030-06-12T11:00:00.000Z');
 });
