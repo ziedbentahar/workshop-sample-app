@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import express from 'express';
 import { createBooking, listBookings } from './bookings.js';
+import { createTodo, deleteTodo, listTodos, updateTodo } from './todos.js';
 import { createStore } from './store.js';
 
 function allowMethods(methods) {
@@ -10,6 +11,13 @@ function allowMethods(methods) {
     response.set('Allow', methods.join(', '));
     response.status(405).json({ error: 'Method not allowed.' });
   };
+}
+
+function requireJson(request, response, next) {
+  if (request.get('Content-Type')?.split(';')[0].trim() !== 'application/json') {
+    return response.status(415).json({ error: 'Use Content-Type: application/json.' });
+  }
+  next();
 }
 
 export function createAppServer({ store = createStore() } = {}) {
@@ -32,17 +40,37 @@ export function createAppServer({ store = createStore() } = {}) {
       response.json(listBookings(store, request.query.roomId, request.query.date));
     })
     .post(
-      (request, response, next) => {
-        if (request.get('Content-Type')?.split(';')[0].trim() !== 'application/json') {
-          return response.status(415).json({ error: 'Use Content-Type: application/json.' });
-        }
-        next();
-      },
+      requireJson,
       express.json({ limit: '16kb', strict: false }),
       (request, response) => {
         response.status(201).json(createBooking(store, request.body));
       }
     );
+
+  app.route('/api/todos')
+    .all(allowMethods(['GET', 'POST']))
+    .get((request, response) => response.json(listTodos(store)))
+    .post(
+      requireJson,
+      express.json({ limit: '16kb', strict: false }),
+      (request, response) => {
+        response.status(201).json(createTodo(store, request.body));
+      }
+    );
+
+  app.route('/api/todos/:id')
+    .all(allowMethods(['PATCH', 'DELETE']))
+    .patch(
+      requireJson,
+      express.json({ limit: '16kb', strict: false }),
+      (request, response) => {
+        response.json(updateTodo(store, request.params.id, request.body));
+      }
+    )
+    .delete((request, response) => {
+      deleteTodo(store, request.params.id);
+      response.status(204).end();
+    });
 
   app.use((request, response) => {
     response.status(404).json({ error: 'API endpoint not found.' });
