@@ -6,5 +6,6 @@ export function createStore() {
       { id: 'aspen', name: 'Aspen', capacity: 12, location: 'First floor', description: 'Bring everyone together.' },
     ],
     bookings: [],
+    todos: [],
   };
 }

@@ -65,7 +65,17 @@ not configured; Vite is used as a development server.
 | `GET /api/bookings?roomId=cedar&date=2030-06-12` | `200`: array of bookings touching that UTC date, sorted by start time. Both filters are required. |
 | `POST /api/bookings` | `201`: the created booking, including its generated `id`. |
 
-Example creation:
+| `GET /api/todos` | `200`: array of todos (`id`, `title`, `completed`, `createdAt`), oldest first. |
+| `POST /api/todos` | `201`: the created todo. Body: `{"title": "..."}`. |
+| `PATCH /api/todos/:id` | `200`: the updated todo. Body: `title` and/or `completed` (boolean). |
+| `DELETE /api/todos/:id` | `204`: no body. |
+
+Todo titles are 1–100 characters after trimming. Unknown todo ids return `404`
+with `{"error":"Todo not found."}`. Todos are in memory and reset when the
+server restarts. The **Todos** tab in the UI lets you add, check, rename and
+delete todos.
+
+Example booking creation:
 
 ```sh
 curl http://localhost:3000/api/bookings \

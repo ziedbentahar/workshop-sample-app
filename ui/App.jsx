@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'react';
+import { api } from './api.js';
+import TodosView from './Todos.jsx';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const timeLabel = (value) => value.slice(11, 16);
 const dateLabel = (value) => new Date(`${value}T12:00:00Z`).toLocaleDateString('en', {
   weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
 });
-
-async function api(path, options) {
-  const response = await fetch(`/api${path}`, options);
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? 'Unable to complete the request.');
-  return body;
-}
 
 function RoomSketch({ capacity }) {
   const chairs = capacity === 4 ? 2 : capacity === 8 ? 3 : 4;
@@ -97,6 +92,7 @@ function BookingForm({ room, date, onBooked }) {
 }
 
 export default function App() {
+  const [view, setView] = useState('rooms');
   const [rooms, setRooms] = useState([]);
   const [roomId, setRoomId] = useState('cedar');
   const [date, setDate] = useState(today);
@@ -151,10 +147,17 @@ export default function App() {
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>
           gather<span className="-ml-2 text-emerald-700">.</span>
         </a>
-        <span className="rounded-full border border-stone-300 px-3 py-1.5 text-xs text-stone-600">Room bookings</span>
+        <nav aria-label="Views" className="flex gap-2">
+          {[['rooms', 'Rooms'], ['todos', 'Todos']].map(([key, label]) => (
+            <button key={key} type="button" aria-pressed={view === key} onClick={() => setView(key)}
+              className={`rounded-full border px-3 py-1.5 text-xs ${view === key ? 'border-emerald-900 bg-emerald-900 text-white' : 'border-stone-300 text-stone-600'}`}>
+              {label}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      <main className="page-shell pb-12">
+      {view === 'todos' ? <TodosView /> : <main className="page-shell pb-12">
         <section className="hero">
           <div>
             <p className="eyebrow text-stone-500">Good work starts with a little space</p>
@@ -261,7 +264,7 @@ export default function App() {
           <span>Gather · A little space for good work.</span>
           <span>Bookings reset when the server restarts.</span>
         </footer>
-      </main>
+      </main>}
     </div>
   );
 }
